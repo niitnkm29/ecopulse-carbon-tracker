@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EcoPulse - Carbon Footprint Tracker</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            slate: {
+              950: '#030712',
+            },
+            emerald: {
+              500: '#10b981',
+              600: '#059669',
+            },
+            mint: {
+              300: '#86efac',
+              400: '#4ade80',
+              500: '#22c55e',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            display: ['Outfit', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="./styles.css">
+
+  <!-- React 18 and ReactDOM 18 UMD -->
+  <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+
+  <!-- Babel Standalone for inline JSX compilation -->
+  <script src="https://unpkg.com/@babel/standalone@7.22.20/babel.min.js"></script>
+
+  <!-- Vanilla Lucide Icons UMD (used for dynamic component rendering) -->
+  <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js"></script>
+
+  <!-- Confetti script -->
+  <script src="./confetti.js"></script>
+</head>
+<body class="bg-slate-950 text-gray-100 min-h-screen selection:bg-emerald-500 selection:text-white">
+
+  <!-- Canvas container for level-up / quest confetti -->
+  <div id="confetti-root"></div>
+
+  <!-- Root mount element for React -->
+  <div id="root"></div>
+
+  <!-- React Application Source -->
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // --- REUSEABLE DYNAMIC LUCIDE ICON WRAPPER ---
+    // Reads icon path vectors directly from the vanilla lucide bundle loaded on window
+    const LucideIcon = ({ name, className = "w-6 h-6", size = 24, strokeWidth = 2 }) => {
+      const iconChildren = window.lucide?.[name] || window.lucide?.icons?.[name] || window.lucide?.icons?.[name.charAt(0).toLowerCase() + name.slice(1)];
+      
+      if (!iconChildren || !Array.isArray(iconChildren)) {
+        // Fallback simple bullet element if icon doesn't exist
+        return (
+          <span className={`inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 ${className}`}></span>
+        );
+      }
+      
+      return (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`lucide lucide-${name.toLowerCase()} ${className}`}
+        >
+          {iconChildren.map((child, idx) => {
+            const [tag, attrs] = child;
+            const reactAttrs = { ...attrs, key: idx };
+            if (reactAttrs.class) {
+              reactAttrs.className = reactAttrs.class;
+              delete reactAttrs.class;
+            }
+            return React.createElement(tag, reactAttrs);
+          })}
+        </svg>
+      );
+    };
+
+    // --- CLASS BASED REACT ERROR BOUNDARY ---
+    // Protects individual modules or the overall container from rendering crashes
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+
+      componentDidCatch(error, errorInfo) {
+        console.error("ErrorBoundary caught rendering issue:", error, errorInfo);
+      }
+
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="p-8 rounded-2xl bg-rose-950/20 border border-rose-500/20 text-center space-y-4 my-4 glass-panel max-w-lg mx-auto">
+              <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400">
+                <LucideIcon name="AlertTriangle" className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-bold font-display text-white">Component Load Error</h3>
+              <p className="text-xs text-gray-400 max-w-sm mx-auto">
+                Something went wrong rendering this content area. Don't worry, your dashboard logs are fully saved.
+              </p>
+              <button
+                onClick={() => {
+                  this.setState({ hasError: false });
+                  // Clear local storage if there was corrupt state
+                  if (confirm("Reset local state cache to restore default template?")) {
+                    localStorage.clear();
+                    window.location.reload();
+                  } else {
+                    window.location.reload();
+                  }
+                }}
+                className="px-4 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-semibold text-xs rounded-lg transition"
+              >
+                Reload Component
+              </button>
+            </div>
+          );
+        }
+
+        return this.props.children;
+      }
+    }
+
+    // --- SEED DATA ---
+    const initialLogs = [
+      { id: 1, text: "Took the metro to college", carbon: 0.4, category: "transport", timestamp: "09:15 AM" },
+      { id: 2, text: "Had a salad and a plant-based vegan burger for lunch", carbon: 0.5, category: "diet", timestamp: "01:30 PM" }
+    ];
+
+    const initialHistory = [
+      { day: "Thu", carbon: 8.4 },
+      { day: "Fri", carbon: 10.2 },
+      { day: "Sat", carbon: 4.8 },
+      { day: "Sun", carbon: 3.2 },
+      { day: "Mon", carbon: 9.6 },
+      { day: "Tue", carbon: 11.0 },
+      { day: "Wed", carbon: 0.9 }
+    ];
+
+    const initialQuests = [
+      { id: "quest-1", title: "The Commuter", description: "Travel by bus or metro today", rewardXP: 150, category: "transport", completed: false },
+      { id: "quest-2", title: "Plant Powered", description: "Eat a completely plant-based meal", rewardXP: 200, category: "diet", completed: false },
+      { id: "quest-3", title: "Power Saver", description: "Turn off your air conditioner/electronics for an hour", rewardXP: 100, category: "energy", completed: false }
+    ];
+
+    const initialLevel = {
+      level: 2,
+      xp: 230,
+      xpNextLevel: 500
+    };
+
+    // --- CLIENT-SIDE NATURAL LANGUAGE PARSER ---
+    // Parses user input string and computes CO2 output locally, with no network access required.
+    const parseActivityText = (text) => {
+      const normalized = text.toLowerCase();
+      const detected = [];
+      let totalCarbon = 0.0;
+
+      // Extract mileage/distance using standard regex patterns
+      const extractDistance = (input, keyword) => {
+        const regexes = [
+          new RegExp(`(?:${keyword})\\s+(?:for\\s+)?(\\d+)\\s*(?:km|kms|kilometers|mile|miles)`, 'i'),
+          new RegExp(`(\\d+)\\s*(?:km|kms|kilometers|mile|miles)\\s+(?:via|by|in|using\\s+)?(?:${keyword})`, 'i'),
+          new RegExp(`(?:drive|took|take|ride|rode)\\s+(\\d+)\\s*(?:km|kms|kilometers|mile|miles)`, 'i')
+        ];
+        
+        for (let regex of regexes) {
+          const match = input.match(regex);
+          if (match && match[1]) {
+            return parseInt(match[1], 10);
+          }
+        }
+        
+        const generalNumberMatch = input.match(/(\d+)\s*(?:km|kms|kilometers|mile|miles)/);
+        if (generalNumberMatch && generalNumberMatch[1]) {
+          return parseInt(generalNumberMatch[1], 10);
+        }
+
+        return 10; // Default distance of 10km
+      };
+
+      // 1. Transport formulas - parsed sequentially to support multi-mode sentences
+      if (normalized.includes("car") || normalized.includes("drive") || normalized.includes("drove") || normalized.includes("taxi")) {
+        const km = extractDistance(normalized, "car|drive|drove|taxi");
+        const carbon = Number((km * 0.20).toFixed(2));
+        detected.push({ category: "transport", name: `Driving (${km}km)`, carbon, icon: "Car" });
+        totalCarbon += carbon;
+      }
+      if (normalized.includes("metro") || normalized.includes("bus") || normalized.includes("train") || normalized.includes("subway") || normalized.includes("transit")) {
+        const km = extractDistance(normalized, "metro|bus|train|subway|transit");
+        const carbon = Number((km * 0.04).toFixed(2));
+        detected.push({ category: "transport", name: `Public Transit (${km}km)`, carbon, icon: "Compass" });
+        totalCarbon += carbon;
+      }
+      if (normalized.includes("walk") || normalized.includes("cycle") || normalized.includes("bike") || normalized.includes("bicycle") || normalized.includes("run")) {
+        detected.push({ category: "transport", name: "Walking / Cycling", carbon: 0.0, icon: "Check" });
+      }
+
+      // 2. Diet formulas
+      if (normalized.includes("meat") || normalized.includes("chicken") || normalized.includes("beef") || normalized.includes("pork") || normalized.includes("steak") || normalized.includes("burger")) {
+        if (!normalized.includes("vegan burger") && !normalized.includes("vegetarian burger") && !normalized.includes("plant-based burger")) {
+          detected.push({ category: "diet", name: "Meat meal", carbon: 3.0, icon: "Apple" });
+          totalCarbon += 3.0;
+        }
+      } 
+      if (normalized.includes("vegan") || normalized.includes("vegetarian") || normalized.includes("salad") || normalized.includes("plant-based") || normalized.includes("tofu")) {
+        detected.push({ category: "diet", name: "Plant-based meal", carbon: 0.5, icon: "Apple" });
+        totalCarbon += 0.5;
+      }
+
+      // 3. Energy formulas
+      if (normalized.includes("ac") || normalized.includes("air conditioner") || normalized.includes("air-con") || normalized.includes("heater") || normalized.includes("heating")) {
+        detected.push({ category: "energy", name: "AC / Climate Control", carbon: 1.2, icon: "Zap" });
+        totalCarbon += 1.2;
+      }
+
+      // Fallback unrecognized entries
+      if (detected.length === 0 && text.trim().length > 5) {
+        detected.push({ category: "energy", name: "General Activity (unspecified)", carbon: 0.1, icon: "Info" });
+        totalCarbon += 0.1;
+      }
+
+      return {
+        detected,
+        totalCarbon: Number(totalCarbon.toFixed(2))
+      };
+    };
+
+    // --- MAIN ECOPULSE APPLICATION ---
+    function EcoPulseApp() {
+      // LocalStorage state sync
+      const [activeTab, setActiveTab] = useState(() => {
+        return localStorage.getItem('ecopulse_tab') || 'dashboard';
+      });
+
+      const [logs, setLogs] = useState(() => {
+        const stored = localStorage.getItem('ecopulse_logs');
+        return stored ? JSON.parse(stored) : initialLogs;
+      });
+
+      const [history, setHistory] = useState(() => {
+        const stored = localStorage.getItem('ecopulse_history');
+        return stored ? JSON.parse(stored) : initialHistory;
+      });
+
+      const [quests, setQuests] = useState(() => {
+        const stored = localStorage.getItem('ecopulse_quests');
+        return stored ? JSON.parse(stored) : initialQuests;
+      });
+
+      const [userLevel, setUserLevel] = useState(() => {
+        const stored = localStorage.getItem('ecopulse_level');
+        return stored ? JSON.parse(stored) : initialLevel;
+      });
+
+      const [inputText, setInputText] = useState('');
+      const [toast, setToast] = useState({ message: '', show: false, type: 'success' });
+      const [showLevelUpAlert, setShowLevelUpAlert] = useState(false);
+
+      // Save tabs
+      useEffect(() => {
+        localStorage.setItem('ecopulse_tab', activeTab);
+      }, [activeTab]);
+
+      // Save logs and sync history
+      useEffect(() => {
+        localStorage.setItem('ecopulse_logs', JSON.stringify(logs));
+        const todayLoggedSum = logs.reduce((acc, curr) => acc + curr.carbon, 0);
+        setHistory(prev => {
+          const updated = [...prev];
+          updated[6] = { ...updated[6], carbon: Number(todayLoggedSum.toFixed(2)) };
+          return updated;
+        });
+      }, [logs]);
+
+      useEffect(() => {
+        localStorage.setItem('ecopulse_history', JSON.stringify(history));
+      }, [history]);
+
+      useEffect(() => {
+        localStorage.setItem('ecopulse_quests', JSON.stringify(quests));
+      }, [quests]);
+
+      useEffect(() => {
+        localStorage.setItem('ecopulse_level', JSON.stringify(userLevel));
+      }, [userLevel]);
+
+      // Carbon numbers
+      const carbonBudget = 12.0;
+      const todayTotal = useMemo(() => {
+        return Number(logs.reduce((acc, curr) => acc + curr.carbon, 0).toFixed(2));
+      }, [logs]);
+
+      const remainingBudget = useMemo(() => {
+        return Number((carbonBudget - todayTotal).toFixed(2));
+      }, [todayTotal]);
+
+      const categoryBreakdown = useMemo(() => {
+        const breakdown = { transport: 0, diet: 0, energy: 0 };
+        logs.forEach(log => {
+          if (breakdown[log.category] !== undefined) {
+            breakdown[log.category] += log.carbon;
+          }
+        });
+        return {
+          transport: Number(breakdown.transport.toFixed(2)),
+          diet: Number(breakdown.diet.toFixed(2)),
+          energy: Number(breakdown.energy.toFixed(2))
+        };
+      }, [logs]);
+
+      // NLP parser live rendering
+      const liveParsed = useMemo(() => {
+        if (!inputText.trim()) return { detected: [], totalCarbon: 0.0 };
+        return parseActivityText(inputText);
+      }, [inputText]);
+
+      // Toast Notifications
+      const triggerToast = (message, type = 'success') => {
+        setToast({ message, show: true, type });
+        setTimeout(() => {
+          setToast(prev => ({ ...prev, show: false }));
+        }, 3000);
+      };
+
+      // Add user XP progress
+      const addXP = (amount) => {
+        setUserLevel(prev => {
+          let newXp = prev.xp + amount;
+          let newLevel = prev.level;
+          let xpNeeded = prev.xpNextLevel;
+          let leveledUp = false;
+
+          while (newXp >= xpNeeded) {
+            newXp -= xpNeeded;
+            newLevel += 1;
+            xpNeeded = Math.floor(xpNeeded * 1.2 / 50) * 50;
+            leveledUp = true;
+          }
+
+          if (leveledUp) {
+            setTimeout(() => {
+              setShowLevelUpAlert(true);
+              if (window.triggerConfetti) {
+                window.triggerConfetti();
+              }
+            }, 300);
+          }
+
+          return {
+            level: newLevel,
+            xp: newXp,
+            xpNextLevel: xpNeeded
+          };
+        });
+      };
+
+      // Log Submit Handler
+      const handleLogSubmit = (e) => {
+        if (e) e.preventDefault();
+        if (!inputText.trim()) return;
+
+        const { detected, totalCarbon } = parseActivityText(inputText);
+        
+        if (detected.length === 0) {
+          triggerToast("Could not recognize specific keywords. Try being more detailed!", "error");
+          return;
+        }
+
+        const now = new Date();
+        const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        const newLogs = [...logs];
+        detected.forEach((item, index) => {
+          newLogs.push({
+            id: Date.now() + index,
+            text: inputText,
+            carbon: item.carbon,
+            category: item.category,
+            timestamp
+          });
+        });
+
+        setLogs(newLogs);
+        setInputText('');
+        triggerToast(`Logged! Added +${totalCarbon} kg CO2 footprint`, "success");
+        addXP(50);
+      };
+
+      // Delete log item
+      const handleDeleteLog = (id) => {
+        const item = logs.find(l => l.id === id);
+        setLogs(logs.filter(l => l.id !== id));
+        if (item) {
+          triggerToast(`Removed activity: -${item.carbon} kg CO2`, "info");
+        }
+      };
+
+      // Complete Quest Action
+      const handleCompleteQuest = (id) => {
+        setQuests(prev => prev.map(q => {
+          if (q.id === id) {
+            if (q.completed) return q;
+            
+            addXP(q.rewardXP);
+            triggerToast(`Quest Completed! +${q.rewardXP} XP Earned`, "success");
+            
+            const now = new Date();
+            const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            // Add negative footprint offset (representing savings)
+            setLogs(currLogs => [
+              ...currLogs,
+              {
+                id: Date.now() + 100,
+                text: `Offset Reward: ${q.title} Challenge`,
+                carbon: -1.0, // Save 1.0 kg CO2 as quest compensation
+                category: q.category,
+                timestamp
+              }
+            ]);
+
+            if (window.triggerConfetti) {
+              window.triggerConfetti();
+            }
+
+            return { ...q, completed: true };
+          }
+          return q;
+        }));
+      };
+
+      const handleResetQuests = () => {
+        setQuests(initialQuests.map(q => ({ ...q, completed: false })));
+        setLogs(initialLogs);
+        setUserLevel(initialLevel);
+        triggerToast("EcoPulse metrics reset successfully!", "info");
+      };
+
+      return (
+        <div className="relative min-h-screen flex flex-col md:flex-row">
+          
+          {/* TOAST PANEL */}
+          {toast.show && (
+            <div className="fixed top-6 right-6 z-50 animate-slide-in-right glass-panel px-5 py-4 rounded-xl border border-emerald-500/30 flex items-center gap-3 shadow-lg glow-emerald">
+              <LucideIcon name="Sparkles" className="w-5 h-5 text-emerald-400 animate-spin" />
+              <div>
+                <p className="text-sm font-semibold text-emerald-300 font-display">{toast.message}</p>
+              </div>
+            </div>
+          )}
+
+          {/* LEVEL UP MODAL PANEL */}
+          {showLevelUpAlert && (
+            <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
+              <div className="glass-panel max-w-md w-full p-8 rounded-3xl border border-emerald-500/40 glow-emerald text-center relative overflow-hidden animate-level-up">
+                <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent pointer-events-none"></div>
+                <div className="shimmer-bg absolute inset-0 opacity-10"></div>
+                
+                <div className="w-20 h-20 bg-emerald-500/20 border-2 border-emerald-400 rounded-full flex items-center justify-center mx-auto mb-6 animate-bounce">
+                  <LucideIcon name="Trophy" className="w-10 h-10 text-emerald-400" />
+                </div>
+                
+                <h2 className="text-3xl font-extrabold font-display bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-mint-300">
+                  Level Up!
+                </h2>
+                
+                <p className="text-gray-400 mt-2">Your carbon footprint awareness is expanding.</p>
+                
+                <div className="my-6 bg-slate-900/60 rounded-2xl py-4 border border-white/5">
+                  <p className="text-sm text-gray-500">NEW GUARDIAN RANK</p>
+                  <p className="text-xl font-bold font-display text-white mt-1">
+                    Level {userLevel.level} Carbon Guardian
+                  </p>
+                </div>
+
+                <p className="text-emerald-400 text-sm font-semibold mb-6 flex items-center justify-center gap-1">
+                  <LucideIcon name="Sparkles" className="w-4 h-4" /> Keep it up! Next goal: Eco Pioneer.
+                </p>
+
+                <button 
+                  onClick={() => setShowLevelUpAlert(false)}
+                  className="w-full py-3 bg-gradient-to-r from-emerald-500 to-mint-500 hover:from-emerald-600 hover:to-mint-600 text-slate-950 font-bold rounded-xl transition duration-300 transform active:scale-95 shadow-md shadow-emerald-950/50"
+                >
+                  Confirm Rank
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* SIDE NAVIGATION */}
+          <aside className="w-full md:w-64 glass-panel border-b md:border-b-0 md:border-r border-white/10 md:h-screen sticky top-0 flex flex-col justify-between z-40">
+            <div>
+              {/* Header Logo */}
+              <div className="p-6 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center border border-emerald-500/20 glow-emerald">
+                    <LucideIcon name="Leaf" className="w-6 h-6 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h1 className="text-xl font-extrabold font-display tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+                      Eco<span className="text-emerald-400">Pulse</span>
+                    </h1>
+                    <span className="text-[10px] text-emerald-500/80 font-bold tracking-wider uppercase font-display">Product Edition</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sidebar Tab Menu */}
+              <nav className="px-4 py-2 space-y-1">
+                <button
+                  onClick={() => setActiveTab('dashboard')}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition duration-200 font-medium ${
+                    activeTab === 'dashboard'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-l-4 border-emerald-400'
+                      : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                  }`}
+                >
+                  <LucideIcon name="Activity" className="w-5 h-5" />
+                  <span>Dashboard</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('logger')}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition duration-200 font-medium ${
+                    activeTab === 'logger'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-l-4 border-emerald-400'
+                      : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                  }`}
+                >
+                  <LucideIcon name="PlusCircle" className="w-5 h-5" />
+                  <span>Log Action</span>
+                  <span className="ml-auto text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">AI</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('quests')}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition duration-200 font-medium ${
+                    activeTab === 'quests'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-l-4 border-emerald-400'
+                      : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                  }`}
+                >
+                  <LucideIcon name="Trophy" className="w-5 h-5" />
+                  <span>Daily Quests</span>
+                  {quests.filter(q => !q.completed).length > 0 && (
+                    <span className="ml-auto w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
+                  )}
+                </button>
+              </nav>
+            </div>
+
+            {/* Profile Avatar Card */}
+            <div className="p-4 border-t border-white/5">
+              <div className="bg-slate-900/60 rounded-2xl p-4 border border-white/5">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-mint-400 rounded-full flex items-center justify-center font-bold text-slate-950 font-display">
+                    G2
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold font-display text-white">Carbon Guardian</h3>
+                    <p className="text-xs text-gray-500">Level {userLevel.level}</p>
+                  </div>
+                </div>
+                
+                {/* XP Progress Bar */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] text-gray-400 font-medium">
+                    <span>XP progress</span>
+                    <span>{userLevel.xp} / {userLevel.xpNextLevel}</span>
+                  </div>
+                  <div className="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden border border-white/5">
+                    <div 
+                      className="bg-gradient-to-r from-emerald-500 to-mint-400 h-full rounded-full transition-all duration-500" 
+                      style={{ width: `${(userLevel.xp / userLevel.xpNextLevel) * 100}%` }}
+                    ></div>
+                  </div>
+                </div>
+              </div>
+              
+              <button 
+                onClick={handleResetQuests}
+                className="w-full text-center mt-3 text-xs text-gray-600 hover:text-emerald-500/70 transition flex items-center justify-center gap-1 py-1"
+              >
+                <LucideIcon name="RefreshCw" className="w-3 h-3" /> Reset App Cache
+              </button>
+            </div>
+          </aside>
+
+          {/* MAIN PAGE CONTAINER */}
+          <main className="flex-1 p-6 md:p-10 max-h-screen overflow-y-auto">
+            
+            {/* Header Content Section */}
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+              <div>
+                <h2 className="text-2xl md:text-3xl font-bold font-display text-white tracking-tight">
+                  {activeTab === 'dashboard' && "EcoPulse Dashboard"}
+                  {activeTab === 'logger' && "One-Sentence Log Console"}
+                  {activeTab === 'quests' && "Eco Guardians - Daily Quests"}
+                </h2>
+                <p className="text-gray-400 text-sm mt-1">
+                  {activeTab === 'dashboard' && "Track metrics, audit categories, and trace carbon trendlines."}
+                  {activeTab === 'logger' && "Log daily routine in simple English. AI parses and tracks the numbers."}
+                  {activeTab === 'quests' && "Complete micro-actions, level up, and earn footprint offsets."}
+                </p>
+              </div>
+
+              {/* Budget status alert boundary */}
+              <div className="flex items-center gap-3">
+                <div className="glass-panel px-4 py-2 rounded-xl flex items-center gap-2 border border-white/5">
+                  <div className={`w-2 h-2 rounded-full ${todayTotal <= carbonBudget ? 'bg-emerald-400' : 'bg-amber-400'} animate-pulse`}></div>
+                  <span className="text-xs font-semibold text-gray-300">
+                    Budget status: {todayTotal <= carbonBudget ? 'Optimal' : 'Over Limit'}
+                  </span>
+                </div>
+              </div>
+            </header>
+
+            {/* TAB RENDERING WITH ROBUST MODULE BOUNDARIES */}
+            <div className="animate-fade-in-up">
+              
+              {/* TAB 1: DASHBOARD MODULE */}
+              {activeTab === 'dashboard' && (
+                <ErrorBoundary>
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    
+                    {/* Hero Carbon Budget Progress Ring */}
+                    <div className="glass-panel p-6 rounded-2xl border border-white/10 flex flex-col justify-between h-[360px] relative overflow-hidden">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-display font-semibold text-gray-200">Daily Carbon Budget</h3>
+                        <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-bold">12.0 kg Cap</span>
+                      </div>
+
+                      {/* Circular Progress Ring Ring */}
+                      <div className="relative flex items-center justify-center flex-1 my-2">
+                        <svg className="w-40 h-40">
+                          {/* Outer placeholder ring */}
+                          <circle
+                            className="text-slate-800"
+                            strokeWidth="12"
+                            stroke="currentColor"
+                            fill="transparent"
+                            r="68"
+                            cx="80"
+                            cy="80"
+                          />
+                          {/* Inner glowing dynamic ring */}
+                          <circle
+                            className="progress-ring__circle text-emerald-400 stroke-current glow-emerald"
+                            strokeWidth="12"
+                            strokeDasharray={2 * Math.PI * 68}
+                            strokeDashoffset={2 * Math.PI * 68 * (1 - Math.min(todayTotal / carbonBudget, 1))}
+                            strokeLinecap="round"
+                            fill="transparent"
+                            r="68"
+                            cx="80"
+                            cy="80"
+                            style={{
+                              color: todayTotal > carbonBudget ? '#fbbf24' : '#10b981'
+                            }}
+                          />
+                        </svg>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                          <span className="text-3xl font-extrabold font-display tracking-tight text-white glow-text-emerald">
+                            {todayTotal}
+                          </span>
+                          <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">kg CO2 logged</span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 border-t border-white/5 pt-4 text-center mt-2">
+                        <div>
+                          <p className="text-xs text-gray-500 font-medium">Logged Balance</p>
+                          <p className="text-base font-bold font-display text-white mt-0.5">{todayTotal} kg</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 font-medium">Remaining</p>
+                          <p className={`text-base font-bold font-display mt-0.5 ${remainingBudget < 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                            {remainingBudget} kg
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Micro-Impact Auditing breakdown progress bars */}
+                    <div className="glass-panel p-6 rounded-2xl border border-white/10 flex flex-col justify-between h-[360px]">
+                      <div>
+                        <div className="flex items-center justify-between mb-6">
+                          <h3 className="font-display font-semibold text-gray-200">Micro-Impact Breakdown</h3>
+                          <LucideIcon name="HelpCircle" className="w-4 h-4 text-gray-500 hover:text-emerald-400 cursor-pointer" />
+                        </div>
+
+                        <div className="space-y-6">
+                          {/* Category Transport bar */}
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-sm">
+                              <div className="flex items-center gap-2 text-gray-300">
+                                <LucideIcon name="Car" className="w-4 h-4 text-emerald-400" />
+                                <span className="font-medium">Transport</span>
+                              </div>
+                              <span className="text-xs text-gray-400 font-semibold">{categoryBreakdown.transport} kg CO2</span>
+                            </div>
+                            <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-white/5">
+                              <div 
+                                className="bg-emerald-500 h-full rounded-full transition-all duration-800" 
+                                style={{ width: `${Math.min((categoryBreakdown.transport / 5.0) * 100, 100)}%` }}
+                              ></div>
+                            </div>
+                            <div className="flex justify-between text-[10px] text-gray-500">
+                              <span>0.0 kg</span>
+                              <span>Target: 5.0 kg</span>
+                            </div>
+                          </div>
+
+                          {/* Category Diet progress bar */}
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-sm">
+                              <div className="flex items-center gap-2 text-gray-300">
+                                <LucideIcon name="Apple" className="w-4 h-4 text-emerald-400" />
+                                <span className="font-medium">Diet / Food</span>
+                              </div>
+                              <span className="text-xs text-gray-400 font-semibold">{categoryBreakdown.diet} kg CO2</span>
+                            </div>
+                            <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-white/5">
+                              <div 
+                                className="bg-emerald-400 h-full rounded-full transition-all duration-800" 
+                                style={{ width: `${Math.min((categoryBreakdown.diet / 4.0) * 100, 100)}%` }}
+                              ></div>
+                            </div>
+                            <div className="flex justify-between text-[10px] text-gray-500">
+                              <span>0.0 kg</span>
+                              <span>Target: 4.0 kg</span>
+                            </div>
+                          </div>
+
+                          {/* Category Energy progress bar */}
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-sm">
+                              <div className="flex items-center gap-2 text-gray-300">
+                                <LucideIcon name="Zap" className="w-4 h-4 text-emerald-400" />
+                                <span className="font-medium">Home Energy</span>
+                              </div>
+                              <span className="text-xs text-gray-400 font-semibold">{categoryBreakdown.energy} kg CO2</span>
+                            </div>
+                            <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-white/5">
+                              <div 
+                                className="bg-mint-300 h-full rounded-full transition-all duration-800" 
+                                style={{ width: `${Math.min((categoryBreakdown.energy / 3.0) * 100, 100)}%` }}
+                              ></div>
+                            </div>
+                            <div className="flex justify-between text-[10px] text-gray-500">
+                              <span>0.0 kg</span>
+                              <span>Target: 3.0 kg</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Custom SVG Bar Chart showing 7-day trendline */}
+                    <div className="glass-panel p-6 rounded-2xl border border-white/10 flex flex-col justify-between h-[360px]">
+                      <div>
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="font-display font-semibold text-gray-200">7-Day Footprint Trend</h3>
+                          <div className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold uppercase tracking-wider">
+                            <LucideIcon name="TrendingUp" className="w-3.5 h-3.5" /> Weekly View
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Bar rendering layout */}
+                      <div className="w-full flex-1 flex flex-col justify-end min-h-[180px] mt-2">
+                        <div className="flex items-end justify-between gap-2 px-2 h-44">
+                          {history.map((h, i) => {
+                            const maxCarbon = 15.0;
+                            const percentage = Math.min((h.carbon / maxCarbon) * 100, 100);
+                            const isToday = i === 6;
+
+                            return (
+                              <div key={i} className="flex-1 flex flex-col items-center group cursor-pointer relative">
+                                <div className="absolute bottom-full mb-2 bg-slate-900 border border-white/10 px-2 py-1 rounded text-[10px] font-bold text-white opacity-0 group-hover:opacity-100 transition pointer-events-none whitespace-nowrap z-50 shadow-md">
+                                  {h.carbon} kg CO2
+                                </div>
+                                
+                                <div 
+                                  className={`w-full rounded-t-md transition-all duration-500 group-hover:opacity-90 ${
+                                    isToday 
+                                      ? 'bg-gradient-to-t from-emerald-600 to-mint-400 glow-mint animate-pulse-border' 
+                                      : 'bg-emerald-500/30 group-hover:bg-emerald-500/50'
+                                  }`}
+                                  style={{ height: `${Math.max(percentage, 5)}%` }}
+                                ></div>
+                                
+                                <span className={`text-[10px] mt-2 font-medium ${isToday ? 'text-emerald-400 font-bold' : 'text-gray-500'}`}>
+                                  {h.day}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="border-t border-white/5 pt-4 mt-2">
+                        <p className="text-xs text-gray-400 flex items-center gap-1.5">
+                          <LucideIcon name="Info" className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Daily budget cap: 12.0 kg.</span>
+                        </p>
+                      </div>
+                    </div>
+
+                  </div>
+                </ErrorBoundary>
+              )}
+
+              {/* TAB 2: NATURAL LANGUAGE LOG CONSOLE */}
+              {activeTab === 'logger' && (
+                <ErrorBoundary>
+                  <div className="max-w-4xl mx-auto space-y-6">
+                    
+                    {/* Textarea console panel */}
+                    <div className="glass-panel p-8 rounded-2xl border border-white/10 shadow-xl relative">
+                      <div className="absolute top-4 right-4 text-[10px] border border-emerald-500/20 text-emerald-400 font-bold tracking-widest uppercase px-2 py-0.5 rounded-full bg-emerald-500/5">
+                        Client-side parsing active
+                      </div>
+                      
+                      <h3 className="text-lg font-bold font-display text-white mb-2">
+                        Natural Language Action Console
+                      </h3>
+                      <p className="text-xs text-gray-500 mb-6">
+                        Write down your day naturally, e.g. "I rode the train for 15km and had a vegan lunch" or "I drove the car."
+                      </p>
+
+                      <form onSubmit={handleLogSubmit} className="space-y-4">
+                        <div className="relative">
+                          <textarea
+                            rows="3"
+                            value={inputText}
+                            onChange={(e) => setInputText(e.target.value)}
+                            placeholder="Tell EcoPulse what you did today... (e.g., 'I took the metro to college and had a vegan lunch')"
+                            className="w-full bg-slate-900/80 border border-white/10 rounded-xl px-5 py-4 text-white text-sm focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition duration-300 resize-none font-sans"
+                          />
+                        </div>
+
+                        {/* Live parsing indicators block */}
+                        {liveParsed.detected.length > 0 && (
+                          <div className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-xs animate-fade-in-up space-y-2">
+                            <p className="font-bold text-emerald-400 flex items-center gap-1.5">
+                              <LucideIcon name="Sparkles" className="w-3.5 h-3.5" /> Parsed Action Breakdown:
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-1.5">
+                              {liveParsed.detected.map((det, idx) => {
+                                return (
+                                  <div key={idx} className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-lg border border-white/5">
+                                    <LucideIcon name={det.icon} className="w-4 h-4 text-emerald-400" />
+                                    <span className="text-gray-300">{det.name}</span>
+                                    <span className="ml-auto font-bold text-emerald-300">{det.carbon > 0 ? `+${det.carbon}` : det.carbon} kg</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div className="border-t border-white/5 pt-2 flex items-center justify-between text-gray-400 font-semibold text-[11px]">
+                              <span>Total Estimated Footprint</span>
+                              <span className="text-emerald-400 font-bold font-display">+{liveParsed.totalCarbon} kg CO2</span>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between gap-4 pt-2">
+                          <div className="text-xs text-gray-500 hidden sm:block">
+                            Press Enter or click the Log button to add this action.
+                          </div>
+                          <button
+                            type="submit"
+                            disabled={!inputText.trim()}
+                            className={`px-6 py-3 bg-gradient-to-r from-emerald-500 to-mint-500 hover:from-emerald-600 hover:to-mint-600 text-slate-950 font-bold rounded-xl transition duration-300 flex items-center gap-2 transform active:scale-95 shadow-lg ${
+                              !inputText.trim() ? 'opacity-50 cursor-not-allowed' : 'glow-emerald'
+                            }`}
+                          >
+                            <LucideIcon name="Plus" className="w-5 h-5 stroke-[3]" />
+                            <span>Log to Dashboard</span>
+                          </button>
+                        </div>
+                      </form>
+
+                      {/* Example templates triggers */}
+                      <div className="mt-8 pt-6 border-t border-white/5">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Or click template examples:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            "I drove the car to work for 15km",
+                            "I took the bus to college and had a salad",
+                            "I walked 2km to the grocery store and bought a chicken sandwich",
+                            "I cooked a vegan soup and used the AC all day"
+                          ].map((temp, index) => (
+                            <button
+                              key={index}
+                              onClick={() => setInputText(temp)}
+                              className="bg-white/5 hover:bg-emerald-500/10 hover:border-emerald-500/30 text-gray-300 hover:text-emerald-400 border border-white/5 px-3 py-1.5 rounded-lg text-xs transition duration-200"
+                            >
+                              "{temp}"
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Timeline Feed log stream */}
+                    <div className="glass-panel p-6 rounded-2xl border border-white/10">
+                      <div className="flex items-center justify-between mb-6">
+                        <h3 className="font-display font-semibold text-gray-200">Today's Logged Actions</h3>
+                        <span className="text-xs text-gray-500">{logs.length} items logged</span>
+                      </div>
+
+                      {logs.length === 0 ? (
+                        <div className="text-center py-12 text-gray-500 space-y-2 border border-dashed border-white/5 rounded-xl">
+                          <LucideIcon name="HelpCircle" className="w-8 h-8 mx-auto text-gray-600" />
+                          <p className="text-sm font-medium">No actions logged today.</p>
+                          <p className="text-xs text-gray-600">Type something in the console above to begin tracking!</p>
+                        </div>
+                      ) : (
+                        <div className="flow-root">
+                          <ul className="-mb-8">
+                            {logs.map((log, index) => {
+                              const isOffset = log.carbon < 0;
+                              let logIcon = "Info";
+                              if (log.category === 'transport') logIcon = "Car";
+                              if (log.category === 'diet') logIcon = "Apple";
+                              if (log.category === 'energy') logIcon = "Zap";
+
+                              return (
+                                <li key={log.id} className="animate-fade-in-up">
+                                  <div className="relative pb-8">
+                                    {index !== logs.length - 1 ? (
+                                      <span className="absolute top-4 left-4 -ml-px h-full w-0.5 bg-slate-800" aria-hidden="true"></span>
+                                    ) : null}
+                                    <div className="relative flex space-x-3 items-start">
+                                      <div>
+                                        <span className={`h-8 w-8 rounded-full flex items-center justify-center ring-8 ring-slate-950 ${
+                                          isOffset 
+                                            ? 'bg-emerald-950 border border-emerald-500/40 text-emerald-400' 
+                                            : 'bg-slate-900 border border-white/5 text-gray-300'
+                                        }`}>
+                                          <LucideIcon name={logIcon} className="w-4 h-4" />
+                                        </span>
+                                      </div>
+                                      <div className="flex-1 min-w-0 pt-1.5 flex justify-between space-x-4">
+                                        <div>
+                                          <p className="text-sm text-gray-200">
+                                            {log.text}{' '}
+                                            <span className="text-xs text-gray-500 bg-slate-900 border border-white/5 px-2 py-0.5 rounded ml-2 font-display uppercase tracking-wider text-[9px]">
+                                              {log.category}
+                                            </span>
+                                          </p>
+                                          <span className="text-xs text-gray-500 mt-1 block">{log.timestamp}</span>
+                                        </div>
+                                        <div className="text-right whitespace-nowrap flex items-center gap-3">
+                                          <span className={`text-sm font-bold font-display ${
+                                            isOffset ? 'text-emerald-400 glow-text-emerald' : 'text-gray-300'
+                                          }`}>
+                                            {isOffset ? '' : '+'}{log.carbon} kg CO2
+                                          </span>
+                                          <button
+                                            onClick={() => handleDeleteLog(log.id)}
+                                            className="text-gray-600 hover:text-rose-400 p-1 transition rounded"
+                                          >
+                                            <LucideIcon name="Trash2" className="w-4 h-4" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                </ErrorBoundary>
+              )}
+
+              {/* TAB 3: DAILY QUESTS & REWARDS */}
+              {activeTab === 'quests' && (
+                <ErrorBoundary>
+                  <div className="max-w-5xl mx-auto space-y-8">
+                    
+                    {/* Guardian Rank overview banner */}
+                    <div className="glass-panel p-6 rounded-2xl border border-white/10 flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden bg-gradient-to-br from-slate-900/60 to-transparent">
+                      <div className="shimmer-bg absolute inset-0 opacity-5"></div>
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center border border-emerald-500/20 glow-emerald">
+                          <LucideIcon name="Award" className="w-6 h-6 text-emerald-400" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold font-display text-white">Gamification Guardian Center</h3>
+                          <p className="text-xs text-gray-400">Complete challenges, level up, and unlock footprint offsets!</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Guardian Rank</p>
+                          <p className="text-base font-extrabold font-display text-white">Level {userLevel.level} Guardian</p>
+                        </div>
+                        <div className="h-10 w-0.5 bg-slate-800"></div>
+                        <div className="text-left">
+                          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Total XP Balance</p>
+                          <p className="text-base font-extrabold font-display text-emerald-400 glow-text-emerald">{userLevel.xp} XP</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quest Card Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {quests.map((q) => {
+                        let questIcon = "HelpCircle";
+                        if (q.category === 'transport') questIcon = "Car";
+                        if (q.category === 'diet') questIcon = "Apple";
+                        if (q.category === 'energy') questIcon = "Zap";
+
+                        return (
+                          <div 
+                            key={q.id} 
+                            className={`glass-panel p-6 rounded-2xl border border-white/10 flex flex-col justify-between h-[280px] glass-panel-hover relative overflow-hidden ${
+                              q.completed ? 'border-emerald-500/20 bg-emerald-500/[0.02]' : ''
+                            }`}
+                          >
+                            <div>
+                              <div className="flex justify-between items-start mb-4">
+                                <span className={`w-10 h-10 rounded-xl flex items-center justify-center border ${
+                                  q.completed 
+                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                                    : 'bg-slate-900 border-white/5 text-gray-400'
+                                }`}>
+                                  <LucideIcon name={questIcon} className="w-5 h-5" />
+                                </span>
+
+                                <span className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full border ${
+                                  q.completed 
+                                    ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10' 
+                                    : 'border-white/5 text-gray-500 bg-slate-900'
+                                }`}>
+                                  {q.rewardXP} XP
+                                </span>
+                              </div>
+
+                              <h4 className="text-base font-bold font-display text-white">{q.title}</h4>
+                              <p className="text-xs text-gray-400 mt-2 line-clamp-3">{q.description}</p>
+                            </div>
+
+                            <div className="mt-4">
+                              {q.completed ? (
+                                <div className="w-full py-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center justify-center gap-2 text-emerald-400 text-xs font-bold font-display">
+                                  <LucideIcon name="Check" className="w-4 h-4" />
+                                  <span>Quest Completed (-1.0 kg Offset)</span>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => handleCompleteQuest(q.id)}
+                                  className="w-full py-2.5 bg-slate-900 hover:bg-emerald-500 hover:text-slate-950 text-emerald-400 border border-emerald-500/30 hover:border-emerald-500 text-xs font-bold rounded-xl transition duration-300 transform active:scale-95 font-display flex items-center justify-center gap-1.5 shadow-sm"
+                                >
+                                  <span>Complete Quest</span>
+                                  <LucideIcon name="ChevronRight" className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Milestone badges row */}
+                    <div className="glass-panel p-6 rounded-2xl border border-white/10">
+                      <h3 className="font-display font-semibold text-gray-200 mb-4 flex items-center gap-2">
+                        <LucideIcon name="Shield" className="w-5 h-5 text-emerald-400" />
+                        <span>Carbon Guardian Milestones & Badges</span>
+                      </h3>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                        {[
+                          { title: "Level 1: Novice Scout", xp: "0 XP", icon: "Leaf", unlocked: true },
+                          { title: "Level 2: Carbon Guardian", xp: "500 XP", icon: "Shield", unlocked: true },
+                          { title: "Level 3: Eco Pioneer", xp: "1100 XP", icon: "Award", unlocked: false },
+                          { title: "Level 4: Green Sage", xp: "2000 XP", icon: "Trophy", unlocked: false }
+                        ].map((tier, idx) => {
+                          const active = userLevel.level >= idx + 1;
+                          return (
+                            <div key={idx} className={`p-4 rounded-xl border flex flex-col items-center text-center ${
+                              active 
+                                ? 'bg-emerald-500/[0.03] border-emerald-500/20 text-emerald-400' 
+                                : 'bg-slate-900/40 border-white/5 text-gray-600'
+                            }`}>
+                              <LucideIcon name={tier.icon} className={`w-8 h-8 mb-2 ${active ? 'text-emerald-400' : 'text-gray-700'}`} />
+                              <p className="text-xs font-bold font-display">{tier.title}</p>
+                              <p className="text-[10px] text-gray-500 mt-1">{tier.xp}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                  </div>
+                </ErrorBoundary>
+              )}
+
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    // Render application container inside root node
+    const rootElement = document.getElementById('root');
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(
+      <ErrorBoundary>
+        <EcoPulseApp />
+      </ErrorBoundary>
+    );
+  </script>
+</body>
+</html>
